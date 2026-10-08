@@ -1,0 +1,10 @@
+{
+  "name": "bean-counter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@netlify/database": "latest",
+    "pg": "^8.13.0"
+  }
+}

@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bean Counter</title>
+<style>
+:root{--bg:#faf6f1;--card:#fff;--ink:#2b2118;--mut:#7a6a5c;--br:#e6dccf;--acc:#6f4e37;--bad:#b3392f;--ok:#2f7d4f}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--acc);color:#fff;padding:.7rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem 1.5rem;align-items:center}
+header b{font-size:1.25rem}
+nav{display:flex;flex-wrap:wrap;gap:.25rem}
+nav a{color:#fff;text-decoration:none;padding:.3rem .7rem;border-radius:6px;opacity:.85}
+nav a.on,nav a:hover{background:rgba(255,255,255,.2);opacity:1}
+main{max-width:1000px;margin:1rem auto;padding:0 1rem}
+.card{background:var(--card);border:1px solid var(--br);border-radius:10px;padding:1rem;margin-bottom:1rem}
+.top{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.8rem}
+h1,h2{margin:.2rem 0;font-size:1.4rem}
+button,.btn{font:inherit;border:0;border-radius:6px;padding:.4rem .8rem;background:var(--acc);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
+.s{background:#efe6da;color:var(--ink)}
+.d{background:var(--bad)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:.5rem;border-bottom:1px solid var(--br);white-space:nowrap}
+th{color:var(--mut);font-weight:600;font-size:.85rem}
+td.a{display:flex;gap:.4rem}
+form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.7rem}
+label{display:flex;flex-direction:column;font-size:.85rem;color:var(--mut);gap:.2rem}
+input,select{font:inherit;padding:.45rem;border:1px solid var(--br);border-radius:6px;color:var(--ink);background:#fff;width:100%}
+.fa{grid-column:1/-1;display:flex;gap:.5rem}
+.badge{background:var(--bad);color:#fff;border-radius:99px;padding:.05rem .5rem;font-size:.75rem;margin-left:.4rem}
+.st{padding:.05rem .6rem;border-radius:99px;font-size:.8rem;background:#efe6da}
+.st.Received{background:#d8efdf;color:var(--ok)}
+.st.Cancelled{background:#f3dcd9;color:var(--bad)}
+.mut{color:var(--mut)}
+#toast{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:.6rem 1rem;border-radius:8px;display:none;max-width:90%;z-index:9}
+</style>
+</head>
+<body>
+<header>
+  <b>&#9749; Bean Counter</b>
+  <nav>
+    <a href="#/bean">Beans (Supply)</a>
+    <a href="#/bean_order">Bean Orders</a>
+    <a href="#/supplier">Suppliers</a>
+    <a href="#/customer">Customers</a>
+  </nav>
+</header>
+<main id="app"><p class="mut">Loading...</p></main>
+<div id="toast"></div>
+<script>
+const app = document.getElementById('app'), tEl = document.getElementById('toast');
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => '$' + Number(n || 0).toFixed(2);
+function toast(m){ tEl.textContent = m; tEl.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => tEl.style.display = 'none', 4500); }
+async function api(m, p, b){
+  const r = await fetch('/api/' + p, {method: m, headers: {'content-type': 'application/json'}, body: b ? JSON.stringify(b) : undefined});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'Something went wrong');
+  return d;
+}
+// f = fields [name, label, type, required, options]; c = table columns [key, header]
+const S = {
+  supplier: {t:'Suppliers', pk:'supplier_id',
+    f:[['name','Supplier name','text',1],['contact_name','Contact person','text'],['email','Email','email'],['phone','Phone','tel']],
+    c:[['name','Supplier'],['contact_name','Contact'],['email','Email'],['phone','Phone']]},
+  bean: {t:'Beans (Supply on hand)', pk:'bean_id', hint:'A red "Low" tag means stock is at or below the reorder level.',
+    f:[['name','Bean name','text',1],['origin_country','Origin country','text'],['roast_level','Roast','sel',0,['Light','Medium','Dark']],['stock_kg','Stock on hand (kg)','number',1],['reorder_level_kg','Reorder level (kg)','number',1]],
+    c:[['name','Bean'],['origin_country','Origin'],['roast_level','Roast'],['stock_kg','Stock (kg)'],['reorder_level_kg','Reorder at (kg)']]},
+  customer: {t:'Customers', pk:'customer_id',
+    f:[['first_name','First name','text',1],['last_name','Last name','text',1],['email','Email','email'],['phone','Phone','tel']],
+    c:[['first_name','First name'],['last_name','Last name'],['email','Email'],['phone','Phone']]},
+  bean_order: {t:'Bean Orders (from suppliers)', pk:'bean_order_id', hint:'Open an order with "Items" to add beans. Setting the status to Received adds those beans to stock.',
+    f:[['supplier_id','Supplier','fk:supplier',1],['order_date','Order date','date',1],['expected_date','Expected delivery','date'],['status','Status','sel',1,['Ordered','Received','Cancelled']],['notes','Notes','text']],
+    c:[['bean_order_id','Order'],['supplier_name','Supplier'],['order_date','Ordered'],['expected_date','Expected'],['status','Status'],['total','Total']]},
+  bean_order_item: {pk:'bean_order_item_id',
+    f:[['bean_id','Bean','fk:bean',1],['quantity_kg','Quantity (kg)','number',1],['price_per_kg','Price per kg ($)','number',1]],
+    c:[['bean_name','Bean'],['quantity_kg','Quantity (kg)'],['price_per_kg','Price / kg'],['line_total','Line total']]}
+};
+let ed = null; // null = no form, 'new' = add form, otherwise id being edited
+
+function cell(r, c){
+  const v = r[c];
+  if (c === 'status') return `<span class="st ${esc(v)}">${esc(v)}</span>`;
+  if (['total','line_total','price_per_kg'].includes(c)) return money(v);
+  if (c === 'stock_kg') return esc(v) + (r.low ? '<span class="badge">Low</span>' : '');
+  if (c === 'bean_order_id') return `<a href="#/order/${v}">#${v}</a>`;
+  return esc(v);
+}
+function table(k, rows){
+  const s = S[k];
+  const body = rows.map(r => `<tr>${s.c.map(c => `<td>${cell(r, c[0])}</td>`).join('')}<td class="a">${
+    k === 'bean_order' ? `<a class="btn s" href="#/order/${r.bean_order_id}">Items</a>` : ''
+  }<button class="s" data-a="edit" data-id="${r[s.pk]}">Edit</button><button class="d" data-a="del" data-k="${k}" data-id="${r[s.pk]}">Delete</button></td></tr>`).join('');
+  return `<div class="card tw"><table><tr>${s.c.map(c => `<th>${c[1]}</th>`).join('')}<th></th></tr>${body || `<tr><td class="mut" colspan="9">No records yet.</td></tr>`}</table></div>`;
+}
+function form(k, fk, row, ord){
+  const s = S[k], id = row[s.pk] || '';
+  const inputs = s.f.map(([n, l, t, req, o]) => {
+    let v = row[n] ?? '', i;
+    if (!id && t === 'date' && n === 'order_date') v = new Date().toISOString().slice(0, 10);
+    if (t.startsWith('fk:')) {
+      const key = t.slice(3) + '_id';
+      i = `<select name="${n}" ${req ? 'required' : ''}><option value="">Choose...</option>${fk[n].map(x => `<option value="${x[key]}" ${x[key] == v ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`;
+    } else if (t === 'sel') {
+      i = `<select name="${n}" ${req ? 'required' : ''}>${req ? '' : '<option value=""></option>'}${o.map(x => `<option ${x === v ? 'selected' : ''}>${x}</option>`).join('')}</select>`;
+    } else {
+      i = `<input name="${n}" type="${t}" value="${esc(v)}" ${req ? 'required' : ''} ${t === 'number' ? 'step="0.01" min="0"' : ''}>`;
+    }
+    return `<label>${l}${req ? ' *' : ''}${i}</label>`;
+  }).join('');
+  return `<div class="card"><form data-k="${k}" data-id="${id}" data-ord="${ord || ''}">${inputs}<div class="fa"><button>${id ? 'Save changes' : 'Add'}</button><button type="button" class="s" data-a="cancel">Cancel</button></div></form></div>`;
+}
+async function fkData(k){
+  const fk = {};
+  for (const f of S[k].f) if (f[2].startsWith('fk:')) fk[f[0]] = await api('GET', f[2].slice(3));
+  return fk;
+}
+async function listPage(k){
+  const s = S[k], rows = await api('GET', k), fk = await fkData(k);
+  const row = ed && ed !== 'new' ? rows.find(r => r[s.pk] == ed) || {} : {};
+  return `<div class="top"><h1>${s.t}</h1><button data-a="new">+ Add</button></div>${s.hint ? `<p class="mut">${s.hint}</p>` : ''}${ed ? form(k, fk, row) : ''}${table(k, rows)}`;
+}
+async function orderPage(id){
+  const o = (await api('GET', 'bean_order')).find(r => r.bean_order_id == id);
+  if (!o) return '<div class="card">Order not found. <a href="#/bean_order">Back to orders</a></div>';
+  const items = await api('GET', 'bean_order_item?order=' + id), fk = await fkData('bean_order_item');
+  const lock = o.status === 'Received';
+  const row = ed && ed !== 'new' ? items.find(r => r.bean_order_item_id == ed) || {} : {};
+  return `<div class="top"><h1>Bean order #${o.bean_order_id}</h1><a class="btn s" href="#/bean_order">&larr; All orders</a></div>
+  <div class="card">Supplier: <b>${esc(o.supplier_name)}</b> &middot; Ordered: ${esc(o.order_date)} &middot; Status: <span class="st ${esc(o.status)}">${esc(o.status)}</span> &middot; Total: <b>${money(o.total)}</b></div>
+  <div class="top"><h2>Items in this order</h2>${lock ? '<span class="mut">Received orders are locked.</span>' : '<button data-a="new">+ Add item</button>'}</div>
+  ${ed && !lock ? form('bean_order_item', fk, row, id) : ''}${table('bean_order_item', items)}`;
+}
+async function route(){
+  const [p, id] = (location.hash.slice(2) || 'bean').split('/');
+  const nav = p === 'order' ? 'bean_order' : p;
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#/' + nav));
+  try {
+    if (p === 'order') app.innerHTML = await orderPage(id);
+    else if (S[p] && p !== 'bean_order_item') app.innerHTML = await listPage(p);
+    else location.hash = '#/bean';
+  } catch (x) { app.innerHTML = '<div class="card">Could not load data: ' + esc(x.message) + '</div>'; }
+}
+app.onclick = async e => {
+  const b = e.target.closest('[data-a]'); if (!b) return;
+  const {a, id} = b.dataset;
+  if (a === 'new') { ed = 'new'; route(); }
+  else if (a === 'edit') { ed = id; route(); }
+  else if (a === 'cancel') { ed = null; route(); }
+  else if (a === 'del') {
+    if (!confirm('Delete this record?')) return;
+    try { await api('DELETE', b.dataset.k + '/' + id); toast('Deleted'); route(); } catch (x) { toast(x.message); }
+  }
+};
+app.onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target, k = f.dataset.k, id = f.dataset.id, d = Object.fromEntries(new FormData(f));
+  if (f.dataset.ord) d.bean_order_id = f.dataset.ord;
+  try { await api(id ? 'PUT' : 'POST', k + (id ? '/' + id : ''), d); ed = null; toast('Saved'); route(); } catch (x) { toast(x.message); }
+};
+addEventListener('hashchange', () => { ed = null; route(); });
+route();
+</script>
+</body>
+</html>
